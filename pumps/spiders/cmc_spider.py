@@ -35,7 +35,9 @@ class CMCParser(scrapy.Spider):
             }
 
             yield Request(
-                url="https://api.coinmarketcap.com/data-api/v3/cryptocurrency/listings/historical" + "?" + urlencode(params),
+                url="https://api.coinmarketcap.com/data-api/v3/cryptocurrency/listings/historical"
+                + "?"
+                + urlencode(params),
                 callback=self.parse_snapshot,
                 meta={"snapshot": snapshot},
             )
@@ -54,6 +56,8 @@ class CMCParser(scrapy.Spider):
             }
             for crypto in data["data"]
         ]
+
+        print(data)
 
         for crypto in parsed_data:
             yield crypto

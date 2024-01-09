@@ -1,6 +1,5 @@
 from scrapy.exceptions import IgnoreRequest
 from scrapy.utils.project import get_project_settings
-
 from urllib.parse import urlencode
 from typing import *
 
