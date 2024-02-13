@@ -8,8 +8,8 @@ from multiprocessing import Pool, freeze_support, RLock, current_process
 from datetime import datetime, timedelta
 from typing import *
 
-import pandas as pd
 import polars as pl
+import pandas as pd
 import os
 import re
 
@@ -22,16 +22,15 @@ class PumpEvent:
     def __post_init__(self):
         self.pump_time = datetime.strptime(self.pump_time, "%Y-%m-%d %H:%M:%S")
 
+    def __str__(self) -> str:
+        return f"{self.ticker}_{self.pump_time.date()}_{str(self.pump_time.time()).replace(":", "-")}"
+
 
 @dataclass
 class DataTickerTimeFrame:
     ticker: str
-    available_start_date: str
-    available_end_date: str
-
-    def __post_init__(self):
-        self.available_start_date = pd.Timestamp(self.available_start_date)
-        self.available_end_date = pd.Timestamp(self.available_end_date)
+    available_start_date: datetime
+    available_end_date: datetime
 
 
 class DataLoader(ABC):
@@ -42,23 +41,20 @@ class DataLoader(ABC):
     ROOT_DIR = Path(os.path.dirname(os.path.abspath(__file__))).parent.parent
 
     def __init__(self, data_dir: str, labeled_pumps_file: str) -> None:
-        self.data_dir = data_dir
-        self.labeled_pumps_file = labeled_pumps_file
+        self.data_dir = os.path.join(self.ROOT_DIR, data_dir)
+        self.labeled_pumps_file = os.path.join(self.ROOT_DIR, labeled_pumps_file)
 
-        self.labeled_pumps: List[PumpEvent] = self.load_pumps_csv()
         self.available_timeframes: List[DataTickerTimeFrame] = (
             self.map_existing_trade_data_to_time_intervals()
         )
 
-    def load_pumps_csv(self) -> List[PumpEvent]:
-        """
-        Loads labeled pumps from data folder. Data contains fields: (ticker: str, time: str, source: str)
-        """
-        df = pd.read_csv(os.path.join(self.ROOT_DIR, self.labeled_pumps_file))
-        pump_events: List[PumpEvent] = [
-            PumpEvent(ticker=row.ticker, pump_time=row.time) for _, row in df.iterrows()
+        self.labeled_pumps: List[PumpEvent] = self.load_pumps()
+
+    def load_pumps(self) -> List[PumpEvent]:
+        df_pumps: pl.DataFrame = pl.read_csv(self.labeled_pumps_file)
+        return [
+            PumpEvent(ticker=pump[0],pump_time=pump[1]) for pump in df_pumps.iter_rows()
         ]
-        return pump_events
 
     def map_existing_trade_data_to_time_intervals(
         self,
@@ -75,8 +71,8 @@ class DataLoader(ABC):
             TICKER_DIR = os.path.join(DATA_DIR, folder)
             parquet_files: List[str] = os.listdir(TICKER_DIR)
 
-            available_dates: List[pd.Timestamp] = [
-                pd.Timestamp(re.search(r"-(\d{4}-\d{2}).parquet", file)[1])
+            available_dates: List[datetime] = [
+                datetime.strptime(re.search(r"-(\d{4}-\d{2}).parquet", file)[1], "%Y-%m")
                 for file in parquet_files
             ]
 
@@ -91,7 +87,7 @@ class DataLoader(ABC):
         return available_timeframes
 
     @staticmethod
-    def create_date_range(start: pd.Timestamp, end: pd.Timestamp) -> List[str]:
+    def create_date_range(start: datetime, end: datetime) -> List[datetime]:
         """Creates a range of months and years between two dates"""
         start_year = start.year
         start_month = start.month
@@ -105,134 +101,67 @@ class DataLoader(ABC):
             end_month_range = end_month if year == end_year else 12
 
             for month in range(start_month_range, end_month_range + 1):
-                date_range.append(pd.Timestamp(year=year, month=month, day=1))
+                date_range.append(datetime(year=year, month=month, day=1))
 
         return date_range
-
-    def read_data(
-        self, ticker: str, pump_event: PumpEvent, lookback_delta: timedelta
-    ) -> pl.DataFrame:
-        """
-        Collect data for a ticker from the universe in a timeframe defined by pump_event.pump_time and lookback_delta.
-        Returns a dataframe containing all trades for a given crypto in the timeline of the pump
-        """
-        # check if there is enough data collected to cover the whole timeperiod [pump-lookback: pump
+    
+     
+    def read_data(self, ticker: str, pump_event: PumpEvent, lookback_delta: timedelta) -> pl.DataFrame:
         rb = pump_event.pump_time
         lb = rb - lookback_delta
-        data_timeframe: DataTickerTimeFrame = self.available_timeframes[ticker]
+   
+        ts_range = self.create_date_range(start=lb, end=rb)
+        ticker_tf: DataTickerTimeFrame = self.available_timeframes[ticker]
 
-        if not (
-            data_timeframe.available_start_date
-            <= lb
-            <= rb
-            <= data_timeframe.available_end_date
-        ):
+        if not (ticker_tf.available_start_date <= lb <= rb <= ticker_tf.available_end_date):
             return pl.DataFrame()
 
-        rb = pump_event.pump_time
-        lb = rb - lookback_delta
-
-        ts_range = self.create_date_range(start=lb, end=rb)
-
-        TICKER_DIR = os.path.join(self.ROOT_DIR, "data/trades", pump_event.ticker)
+        TICKER_DIR = os.path.join(self.data_dir, ticker)
         df = pl.DataFrame()
 
         for date in ts_range:
             month, year = str(date.month).zfill(2), date.year
-            slug = f"{pump_event.ticker}-{year}-{str(month).zfill(2)}.parquet"
+            slug = f"{ticker}-{year}-{str(month).zfill(2)}.parquet"
             df_tmp = pl.read_parquet(os.path.join(TICKER_DIR, slug))
-
             df = df.vstack(df_tmp)
 
-        return df
-
-    def create_crosssection(self, pump_event: PumpEvent) -> pl.DataFrame:
+        return df.filter(
+            (pl.col("time") >= pump_event.pump_time - lookback_delta) & 
+            (pl.col("time") <= pump_event.pump_time)
+        )
+    
+    def create_crosssection(
+        self, pump_event: PumpEvent
+    ) -> pd.DataFrame:
         """Creates a crosssection within a period of time of the pump. Applies create_features method to each dataset and
         combines all transformed data into a single dataframe representing one crosssection.
         """
 
         df_crosssection = pd.DataFrame()
-        tickers = list(self.available_timeframes.keys())[:3]
 
-        pid = current_process().pid
+        tickers = list(self.available_timeframes.keys())
 
-        with tqdm(total=len(tickers), position=pid + 1) as pbar:
+        for ticker in tickers:
+            df_ticker: pl.DataFrame = self.read_data(
+                ticker=ticker, pump_event=pump_event, lookback_delta=timedelta(days=30)
+            )
 
-            for ticker in tickers:
+            if df_ticker.is_empty():
+                continue
 
-                df_ticker: pl.DataFrame = self.read_data(
-                    ticker=ticker,
-                    pump_event=pump_event,
-                    lookback_delta=timedelta(days=30),
-                )
+            df_features: pd.DataFrame = self.create_features(df_ticker=df_ticker, pump_event=pump_event)
 
-                if df_ticker.is_empty():
-                    continue
+            df_features["is_pumped"] = ticker == pump_event.ticker
+            df_features["ticker"] = ticker
 
-                df_features: pd.DataFrame = self.create_features(
-                    pump_event=pump_event, df_ticker=df_ticker
-                )
-                # add additional column labelling if these features represent the pumped ticker
-                df_features["is_pumped"] = ticker == pump_event.ticker
-                df_crosssection = pd.concat([df_crosssection, df_features])
-                pbar.update(1)
+            df_crosssection = pd.concat([df_crosssection, df_features])
 
         return df_crosssection
-
-    # @abstractmethod
-    def create_features(
-        self, pump_event: PumpEvent, df_ticker: pd.DataFrame
-    ) -> pl.DataFrame:
-        raise NotImplemented
-
-    def multiprocess_multiple(self) -> pd.DataFrame:
-        freeze_support()
-
-        df_transformed = pd.DataFrame()
-        pool = Pool(processes=3, initargs=(RLock(),), initializer=tqdm.set_lock)
-        results = []
-
-        for i, pump_event in enumerate(self.labeled_pumps[:3]):
-            res: AsyncResult = pool.apply_async(
-                func=partial(self.create_crosssection, pump_event=pump_event)
-            )
-            results.append(res)
-
-        pool.close()
-
-        for result in results:
-            df_transformed = pd.concat([df_transformed, result.get()])
-
-        return df_transformed
-
-    def multiprocess_transform(self) -> pd.DataFrame:
-
-        df_transformed = pd.DataFrame()
-        pool = Pool(processes=3)
-        results = []
-
-        for pump_event in self.labeled_pumps[:3]:
-            res: AsyncResult = pool.apply_async(
-                func=partial(self.create_crosssection, pump_event=pump_event)
-            )
-            results.append(res)
-
-        pool.close()
-
-        for result in results:
-            df_transformed = pd.concat([df_transformed, result.get()])
-
-        return df_transformed
 
     def multiprocess_transform_data(self) -> pd.DataFrame:
         df_transformed = pd.DataFrame()
 
-        with (
-            tqdm(
-                total=len(self.labeled_pumps), desc="Transforming data", leave=False
-            ) as pbar,
-            Pool(processes=3) as pool,
-        ):
+        with Pool(processes=10) as pool:
             results = []
 
             for pump_event in self.labeled_pumps:
@@ -241,29 +170,32 @@ class DataLoader(ABC):
                 )
                 results.append(res)
 
-            for result in results:
+            for result in tqdm(results):
                 df_transformed = pd.concat([df_transformed, result.get()])
-                pbar.update(1)
 
         return df_transformed
 
+
     def transform_data(self) -> pd.DataFrame:
+        
         df_transformed = pd.DataFrame()
 
-        for pump_event in tqdm(self.labeled_pumps[:3]):
-
-            df_crosssection: pd.DataFrame = self.create_crosssection(
-                pump_event=pump_event
-            )
-
+        for pump_event in tqdm(self.labeled_pumps):
+            df_crosssection: pd.DataFrame = self.create_crosssection(pump_event=pump_event)
             df_transformed = pd.concat([df_transformed, df_crosssection])
 
         return df_transformed
+  
+    # @abstractmethod
+    def create_features(
+        self, pump_event: PumpEvent, df_ticker: pl.DataFrame
+    ) -> pl.DataFrame:
+        raise NotImplemented
 
 
 if __name__ == "__main__":
-    print(
-        DataLoader(
-            "data/trades", "data/pumps/cleaned/pumps_verified.csv"
-        ).available_timeframes
+    loader = DataLoader(
+        data_dir="data/trades", labeled_pumps_file="data/pumps/cleaned/pumps_verified.csv"
     )
+
+    loader.transform_data()
