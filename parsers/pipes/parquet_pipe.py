@@ -6,7 +6,6 @@ import pandas as pd
 
 
 class ParquetPipeline:
-
     """Store collected data as folders with parquet files"""
 
     cols = [
