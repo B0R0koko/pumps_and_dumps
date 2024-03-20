@@ -16,7 +16,7 @@ import logging
 logging.basicConfig(
     filename="features/pipes/cfg/execution.log",
     level=logging.DEBUG,
-    format="%(levelname)s - %(message)s",
+    format="%(asctime)s%(levelname)s - %(message)s",
 )
 
 
@@ -188,8 +188,12 @@ class DataLoader:
         """
 
         df_crosssection = pd.DataFrame()
+        pbar = tqdm(self.tickers, leave=False)
 
-        for ticker in tqdm(self.tickers, leave=False):
+        for ticker in pbar:
+            pbar.set_description(
+                f"Creating crosssection: {ticker} for pump: {pump_event.ticker}"
+            )
             df_ticker: pl.LazyFrame = self.scan_data(
                 ticker=ticker, pump_event=pump_event, lookback_delta=timedelta(days=60)
             )
@@ -205,13 +209,18 @@ class DataLoader:
             df_features: pd.DataFrame = self.create_features(
                 df_ticker=df_ticker, pump_event=pump_event
             )
+            # Add ticker and is_pumped label
+            df_features["ticker"] = ticker
+            df_features["is_pumped"] = ticker == pump_event.ticker
+            df_features["pumped_ticker"] = pump_event.ticker
+
             df_crosssection = pd.concat([df_crosssection, df_features])
 
         return df_crosssection
 
     def run(self) -> None:
 
-        for pump_event in tqdm(self.pump_events):
+        for pump_event in tqdm(self.pump_events[:2]):
             df_crosssection: pd.DataFrame = self.create_crosssection(
                 pump_event=pump_event
             )

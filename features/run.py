@@ -19,7 +19,7 @@ class Loader(DataLoader):
         # Perform all feature engineering here
         # Leave only the last 24 hours of the data before pump
         df_features: pd.DataFrame = transform_features(
-            df=df_ticker, pump_event=pump_event, window="7d", window_output="1h"
+            df=df_ticker, pump=pump_event, window="7d", window_output="1h"
         )
         return df_features
 
