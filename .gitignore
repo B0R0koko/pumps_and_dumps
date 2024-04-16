@@ -1,0 +1,6 @@
+env
+.env
+crypto_session.session
+data
+configs/
+__pycache__
