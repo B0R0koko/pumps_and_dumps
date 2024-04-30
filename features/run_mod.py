@@ -1,6 +1,6 @@
 from typing import List
 from pipes.dataloader_mod import DataLoader, PumpEvent
-from pipes.features import transform_to_simple_features
+from pipes.features.features_30_04 import transform_to_features_30
 from datetime import timedelta
 
 import pandas as pd
@@ -23,7 +23,7 @@ class Loader(DataLoader):
         since such tickers will never be pumped in the first place
         """
         self.df_cmc_snapshots["time_diff"] = (
-            self.df_cmc_snapshots["snapshot"] - pump.time
+            self.df_cmc_snapshots["date"] - pump.time
         ).abs()  # abs timedelta
 
         shit_coins: List[str] = self.df_cmc_snapshots[
@@ -81,30 +81,32 @@ class Loader(DataLoader):
 
     def create_features(self, pump: PumpEvent, df_ticker: pd.DataFrame, ticker: str) -> pd.DataFrame:
         # Perform all feature engineering here
-        base_asset: str = re.sub(r"(BTC|USDT)$", "", pump.ticker)
+        base_asset: str = re.sub(r"(BTC|USDT)$", "", ticker)
 
         df_cmc_ticker: pd.DataFrame = self.df_cmc_snapshots[
             (self.df_cmc_snapshots["symbol"] == base_asset) &
-            (self.df_cmc_snapshots["snapshot"] < pump.time.floor("1d"))
+            (self.df_cmc_snapshots["date"] < pump.time.floor("1d")) &
+            (self.df_cmc_snapshots["date"] >= pump.time.floor("1d") - self.lookback_period)
         ].copy()
 
-        df_ticker_features: pd.DataFrame = transform_to_simple_features(
+        df_ticker_features: pd.DataFrame = transform_to_features_30(
             df_ticker=df_ticker, pump=pump, df_cmc_ticker=df_cmc_ticker, ticker=ticker
         )
-
+    
         return df_ticker_features
 
 
 if __name__ == "__main__":
+
     loader = Loader(
         trades_dir="data/trades_parquet",
-        output_path="data/datasets/train_16_04.parquet",
+        output_path="data/datasets/train_30_04.parquet",
         cmc_snapshots_file="data/cmc/cmc_snapshots.csv",
         labeled_pumps_file="data/pumps/pumps_31_03_2024.json",
         lookback_period=timedelta(days=30),
-        warm_start=False,
+        warm_start=True,
         progress_file="features/progress.json",
-        n_workers=5,
+        n_workers=2,
         use_exchanges=["binance"]
     )
     loader.run()

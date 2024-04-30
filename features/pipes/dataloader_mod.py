@@ -127,7 +127,7 @@ class DataLoader(ABC):
         Loads cmc snapshots into dataframe, this will be used for filtering by rank for each crosssection
         """
         df_cmc_snapshots: pd.DataFrame = pd.read_csv(self.cmc_snapshots_file)
-        df_cmc_snapshots["snapshot"] = pd.to_datetime(
+        df_cmc_snapshots["date"] = pd.to_datetime(
             df_cmc_snapshots["snapshot"], format="%Y%m%d"
         )
         return df_cmc_snapshots
