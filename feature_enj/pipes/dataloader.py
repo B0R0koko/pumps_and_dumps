@@ -61,7 +61,7 @@ class DataLoader(ABC):
         labeled_pumps_file: str = "data/pumps/pumps_31_03_2024.json",
         lookback_period: timedelta = timedelta(days=30),
         warm_start: bool = False,
-        progress_file: str = "features/progress.json",
+        progress_file: str = "feature_enj/progress.json",
         n_workers: int = 5,
         use_exchanges: List[str] = ["binance", "kucoin"]
     ) -> Self:
@@ -165,15 +165,15 @@ class DataLoader(ABC):
             map_exchange_df[exchange] = pd.DataFrame(exchange_data)
 
         return map_exchange_df
+    
 
     def load_data(self, ticker: str, pump: PumpEvent) -> pd.DataFrame: 
         """Load data pd.DataFrame from trades_dir/exchange/ticker folder"""
+        time_ub: pd.Timestamp = pump.time.floor("1h") - timedelta(hours=1)
 
         # data is organized by days
         date_range: List[pd.Timestamp] = pd.date_range(
-            start=pump.time.round("1h") - self.lookback_period - timedelta(days=14, hours=1),
-            end=pump.time.round("1h") - timedelta(hours=1), 
-            freq="D",
+            start=time_ub - self.lookback_period, end=time_ub, freq="D",
         ).tolist()
 
         df: pd.DataFrame = pd.DataFrame()
@@ -183,17 +183,38 @@ class DataLoader(ABC):
             file_path: str = os.path.join(self.trades_dir, pump.exchange, ticker, file_name)
             # Check if file exists
             if os.path.exists(file_path):
-
                 df_date: pd.DataFrame = pd.read_parquet(
                     os.path.join(self.trades_dir, pump.exchange, ticker, file_name)
                 )
+                df_date["time"] = pd.to_datetime(df_date["time"], unit="ms")
+                df_date["time"] = df_date["time"].dt.tz_localize(None)
+
+                #  load BTCUSDT data for this date and add BTC open/close price to the df_date dataset
+                df_btc: pd.DataFrame = pd.read_parquet(
+                    os.path.join(self.trades_dir, "binance", "BTCUSDT", f"BTCUSDT-trades-{str(date.date())}.parquet")
+                )
+                df_btc["time"] = pd.to_datetime(df_btc["time"], unit="ms")
+                df_btc["time"] = df_btc["time"].dt.tz_localize(None)
+
+                # Create 1s candles
+                df_btc: pd.DataFrame = df_btc.resample(on="time", rule="1s").agg(
+                    open=("price", "first"),
+                    close=("price", "last")
+                ).reset_index()
+
+                df_btc = df_btc.rename(columns={"time": "time_sec"})
+                df_date["time_sec"] = df_date["time"].dt.floor("1s")
+                
+                df_date = df_date.merge(
+                    df_btc, on="time_sec", how="left"
+                )
+
                 df = pd.concat([df, df_date])
 
         df["time"] = pd.to_datetime(df["time"], unit="ms")
 
         return df[
-            (df["time"] >= pump.time.round("1h") - self.lookback_period - timedelta(hours=1))
-            & (df["time"] <= pump.time.round("1h") - timedelta(hours=1))
+            (df["time"] >= time_ub - self.lookback_period) & (df["time"] <= time_ub)
         ]
 
     @abstractmethod
@@ -227,9 +248,9 @@ class DataLoader(ABC):
         """
         df_crosssection: pd.DataFrame = pd.DataFrame()
         # Check if the pumped ticker is in collected data, otherwise no point in running code below
-        tickers: List[str] = self.get_crosssection_tickers(pump=pump)
+        tickers: List[str] | None = self.get_crosssection_tickers(pump=pump)
 
-        if pump.ticker not in tickers:
+        if not tickers:
             return pump, df_crosssection
         
         tickers_iterable: List[str] | tqdm = tqdm(tickers, leave=False) if self.n_workers == 1 else tickers
@@ -262,10 +283,8 @@ class DataLoader(ABC):
 
             if not df_crosssection.empty:
                 df_crosssection.to_parquet(
-                    self.output_path,
-                    compression="gzip",
-                    engine="fastparquet",
-                    append=os.path.exists(self.output_path),
+                    self.output_path, compression="gzip", engine="fastparquet", 
+                    append=os.path.exists(self.output_path), index=False
                 )
 
             self.task_stack.pop(pump)

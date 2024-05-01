@@ -2,10 +2,12 @@ from tqdm import tqdm
 from multiprocessing import Pool
 from multiprocessing.pool import AsyncResult
 from functools import partial
+from polars.io.csv.batched_reader import BatchedCsvReader
 from typing import *
 
 
 import polars as pl
+import pandas as pd
 import zipfile
 import os
 import re
@@ -18,12 +20,8 @@ import gc
 
 COLS_EXCHANGES = {
     "binance": [
-        "trade_id",
-        "price",
-        "qty",
-        "quoteQty",
-        "time",
-        "isBuyerMaker",
+        "trade_id", "price", "qty",
+        "quoteQty", "time", "isBuyerMaker",
         "isBestMatch",
     ],
     "kucoin": ["trade_id", "time", "price", "qty", "side"],
@@ -62,10 +60,8 @@ class ZipToParquetTransfromer:
         self,
         trades_dir: str = "data/trades",
         exchange: str = "binance",
-        # if inplace is set to True, zip files will be overwritten by parquet files otherwise
         # output_dir will be used as output directory for all parquet files
         output_dir: str | None = "data/trades_parquet",
-        inplace: bool = False,
         transform_tickers: List[str] | None = None,
         require_split_into_days: bool = True,
         progress_file: str = "preprocessing/progress.json",
@@ -75,7 +71,6 @@ class ZipToParquetTransfromer:
         self.exchange: str = exchange
         self.trades_dir: str = trades_dir
         self.output_dir: str = output_dir
-        self.inplace: bool = inplace
         # for Kucoin is already split into daily zipped files, therefore no need to split it
         self.require_split_into_days: bool = require_split_into_days
         self.progress_file: str = progress_file
@@ -143,6 +138,7 @@ class ZipToParquetTransfromer:
         """Write data to parquet file"""
         # Group by data by days and write to parquet files
         df: pl.DataFrame = df.select(LEAVE_COLS[self.exchange])
+
         if not self.require_split_into_days:
             # just dump data into parquet file, data is already split into daily chunks
             df.write_parquet(
@@ -165,7 +161,11 @@ class ZipToParquetTransfromer:
             )
             # Drop date column and wrtie to parquet file
             df_date = df_date.drop(["date"])
-            df_date.write_parquet(file_path, compression="gzip")
+
+            df_date.to_pandas().to_parquet(
+                file_path, compression="gzip", engine="fastparquet", 
+                append=os.path.exists(file_path), index=False
+            )
 
         del df
         gc.collect()
@@ -185,48 +185,46 @@ class ZipToParquetTransfromer:
                 path="tmp",
             )
 
-        df: pl.DataFrame = pl.read_csv(
-            os.path.join("tmp", f"{file_no_ext}.csv"),
-            has_header=False,
-            new_columns=COLS_EXCHANGES[self.exchange],
-            low_memory=True,
+        file_path: str = os.path.join("tmp", f"{file_no_ext}.csv")
+
+        output_ticker_dir: str = os.path.join(
+            self.output_dir, self.exchange, ticker
         )
+        # create output_dir if it doesn't exist and save parquet file to it
+        os.makedirs(output_ticker_dir, exist_ok=True)
+
+        if os.path.getsize(file_path) / 1024**2 <= 512:
+            # If unpacked csv file is less than 512mb than load it in one go
+            df: pl.DataFrame = pl.read_csv(
+                source=file_path,
+                has_header=False,
+                new_columns=COLS_EXCHANGES[self.exchange],
+            )
+            self.write_to_parquet(
+                df=df, output_ticker_dir=output_ticker_dir, ticker=ticker, file_no_ext=file_no_ext,
+            )
+
+        # Otherwise read file in chunks
+        else:
+            reader: BatchedCsvReader = pl.read_csv_batched(
+                source=file_path,
+                has_header=False,
+                new_columns=COLS_EXCHANGES[self.exchange],
+                low_memory=True,
+                batch_size=100000
+            )
+            batch: List[pl.DataFrame] | None
+            # Stop when chunk is None
+            while (batch := reader.next_batches(1)) is not None:
+                self.write_to_parquet(
+                    df=batch[0],
+                    output_ticker_dir=output_ticker_dir,
+                    ticker=ticker,
+                    file_no_ext=file_no_ext,
+                )
+
         # remove unzipped csv file as it is loaded into the
         os.remove(os.path.join("tmp", file_csv))
-
-        if self.inplace:
-            # remove already existing zip file and write data from memory to parquet files
-            output_ticker_dir: str = os.path.join(
-                self.trades_dir, self.exchange, ticker
-            )
-            self.write_to_parquet(
-                df=df,
-                output_ticker_dir=output_ticker_dir,
-                ticker=ticker,
-                file_no_ext=file_no_ext,
-            )
-        else:
-            output_ticker_dir: str = os.path.join(
-                self.output_dir, self.exchange, ticker
-            )
-            # create output_dir if it doesn't exist and save parquet file to it
-            os.makedirs(output_ticker_dir, exist_ok=True)
-            self.write_to_parquet(
-                df=df,
-                output_ticker_dir=output_ticker_dir,
-                ticker=ticker,
-                file_no_ext=file_no_ext,
-            )
-
-    def remove_zip_files(self, ticker: str) -> None:
-        """Remove all zip files after successful conversion to parquet files. Only runs if inplace = True"""
-        ticker_folder: str = os.path.join(self.trades_dir, self.exchange, ticker)
-        zip_files_to_remove: List[str] = [
-            file for file in os.listdir(ticker_folder) if file.endswith(".zip")
-        ]
-
-        for file in zip_files_to_remove:
-            os.remove(os.path.join(ticker_folder, file))
 
     def transform_all(self):
         pbar = tqdm(self.tickers, total=len(self.tickers))
@@ -234,10 +232,6 @@ class ZipToParquetTransfromer:
         for ticker in pbar:
             pbar.set_description(f"Transforming to parquet: {ticker}")
             self.unzip_ticker(ticker=ticker)
-
-            if self.inplace:
-                # if inplace is set to True, run a clean up of zip files in tickers_folder
-                self.remove_zip_files(ticker=ticker)
 
             # upon successful run, update progress.json file by removing from the array ticker
             # that has been preprocessed
@@ -280,11 +274,10 @@ if __name__ == "__main__":
         trades_dir="data/trades",
         exchange="binance",
         output_dir="data/trades_parquet",
-        inplace=False,  # set this to True to overwrite data/trades folder with parquet files
-        transform_tickers=None,  # set this to None, to have all tickers preprocessed from data/trades folder
+        transform_tickers=["BTCUSDT"],  # set this to None, to have all tickers preprocessed from data/trades folder
         require_split_into_days=True,
         progress_file="preprocessing/progress.json",
-        warm_start=True,  # set to True to run with warm_start, tickers will be loaded from progress.json
+        warm_start=False,  # set to True to run with warm_start, tickers will be loaded from progress.json
         n_workers=1,  # recommended to run in a single process, avoids memory overflows, enables state updates
     )
     transformer.run()

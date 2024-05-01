@@ -24,9 +24,6 @@ def check_num_times_has_been_pumped(pump: PumpEvent, ticker: str) -> int:
     return df_prev_pumps.shape[0]
 
 
-
-
-
 def transform_to_features_19(
     df_ticker: pd.DataFrame, pump: PumpEvent, df_cmc_ticker: pd.DataFrame, ticker: str
 ) -> pd.DataFrame:

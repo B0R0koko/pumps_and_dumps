@@ -1,6 +1,6 @@
 from typing import List
-from pipes.dataloader_mod import DataLoader, PumpEvent
-from pipes.features.features_30_04 import transform_to_features_30
+from pipes.dataloader import DataLoader, PumpEvent
+from features.features_30_04 import transform_to_features_30
 from datetime import timedelta
 
 import pandas as pd
@@ -13,9 +13,9 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 class Loader(DataLoader):
 
-    def get_crosssection_tickers(self, pump: PumpEvent) -> List[str]:
+    def get_crosssection_tickers(self, pump: PumpEvent) -> List[str] | None:
         
-        CMC_RANK_ABOVE = 100
+        TOP_CMC_RANK = 100
         
         """
         For each pump we create a crosssection, we would like to create a crosssection using top-50 + tickers,
@@ -26,34 +26,38 @@ class Loader(DataLoader):
             self.df_cmc_snapshots["date"] - pump.time
         ).abs()  # abs timedelta
 
-        shit_coins: List[str] = self.df_cmc_snapshots[
+        top_coins: List[str] = self.df_cmc_snapshots[
             (self.df_cmc_snapshots["time_diff"] == self.df_cmc_snapshots["time_diff"].min())
-            & (self.df_cmc_snapshots["cmc_rank"] >= CMC_RANK_ABOVE)
+            & (self.df_cmc_snapshots["cmc_rank"] <= TOP_CMC_RANK)
         ]["symbol"].tolist()
 
         quote_asset: str = "BTC" if pump.exchange == "binance" else "USDT"
-        shit_coins: List[str] = [f"{el}{quote_asset}" for el in shit_coins]
+        top_coins: List[str] = set([f"{el}{quote_asset}" for el in top_coins])
 
-        shit_coins: set = set(shit_coins) | set([pump.ticker])
         # create a set of tickers traded on pump.exchange within timeframe
         # [pump.time - lookback_period, pump.time]
 
         df_timeframes: pd.DataFrame = self.available_timeframes[pump.exchange]
 
-        HAS_ENOUGH_DATA = (
-            df_timeframes["available_from"] <= (pump.time - self.lookback_period)
-        ) & (pump.time <= df_timeframes["available_to"])
+        HAS_ENOUGH_DATA: pd.Series[bool] = (
+            (df_timeframes["available_from"] <= (pump.time - self.lookback_period)) & 
+            (pump.time <= df_timeframes["available_to"])
+        )
 
         collected_tickers: set = set(df_timeframes[HAS_ENOUGH_DATA]["ticker"].tolist())
+
+        if pump.ticker not in collected_tickers:
+            # if pumped ticker doesn't have enough data return no tickers
+            return
         # intersect these tickers with ones form the shit_coins
         tickers: List[str] = list(
-            # also include pumped ticker
-            shit_coins.intersection(collected_tickers)
+            (collected_tickers - top_coins) | set([pump.ticker]) # remove top tickers and union add pumped ticker which has enough data
         )
 
         return tickers
-    
+        
     def preprocess_data(self, df_ticker: pd.DataFrame, ticker: str, pump: PumpEvent) -> pd.DataFrame:
+
         if pump.exchange == "kucoin":
             # if buyer is maker, then someone else matched his order => SELL
             df_ticker["isBuyerMaker"] = df_ticker["side"] == "SELL"
@@ -100,13 +104,14 @@ if __name__ == "__main__":
 
     loader = Loader(
         trades_dir="data/trades_parquet",
-        output_path="data/datasets/train_30_04.parquet",
+        output_path="data/datasets/train_01_05.parquet",
         cmc_snapshots_file="data/cmc/cmc_snapshots.csv",
         labeled_pumps_file="data/pumps/pumps_31_03_2024.json",
         lookback_period=timedelta(days=30),
-        warm_start=True,
-        progress_file="features/progress.json",
-        n_workers=2,
+        warm_start=False,
+        progress_file="feature_enj/progress.json",
+        n_workers=1,
         use_exchanges=["binance"]
     )
+
     loader.run()
