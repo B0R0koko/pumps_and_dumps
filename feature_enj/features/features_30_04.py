@@ -35,12 +35,10 @@ def transform_to_features_30(
     
     all_features: Dict[str, float] = {}
 
-    df_ticker["quote"] = df_ticker["price"] * df_ticker["qty"]
-    df_ticker["quote_usdt"] = df_ticker["open"] * df_ticker["quote"]
+    df_ticker["quote_abs"] = df_ticker["price"] * df_ticker["qty"]
 
     df_ticker["qty_sign"] = (1 - 2 * df_ticker["isBuyerMaker"]) * df_ticker["qty"]
-    df_ticker["quote_usdt_sign"] = (1 - 2 * df_ticker["isBuyerMaker"]) * df_ticker["quote"]
-    df_ticker["quote_usdt_sign"] = (1 - 2 * df_ticker["isBuyerMaker"]) * df_ticker["quote_usdt"]
+    df_ticker["quote_sign"] = (1 - 2 * df_ticker["isBuyerMaker"]) * df_ticker["quote_abs"]
 
     df_trades: pd.DataFrame = df_ticker.groupby("time").agg(
         price_first=("price", "first"),
@@ -49,18 +47,18 @@ def transform_to_features_30(
         price_min=("price", "min"),
         qty_sign=("qty_sign", "sum"),
         qty_abs=("qty", "sum"),
-        quote_usdt_sign=("quote_usdt_sign", "sum"),
-        quote_usdt_abs=("quote", "sum"),
+        quote_sign=("quote_sign", "sum"),
+        quote_abs=("quote_abs", "sum"),
     )
 
     df_trades["is_long"] = df_trades["qty_sign"] >= 0
-    df_trades["quote_usdt_long"] = df_trades["quote_usdt_abs"] * df_trades["is_long"]
+    df_trades["quote_long"] = df_trades["quote_abs"] * df_trades["is_long"]
     df_trades = df_trades.reset_index()
 
-    df_trades["quote_slippage_usdt_abs"] = (
-        df_trades["quote_usdt_sign"] - df_trades["qty_sign"] * df_trades["price_first"]
+    df_trades["quote_slippage_abs"] = (
+        df_trades["quote_sign"] - df_trades["qty_sign"] * df_trades["price_first"]
     )
-    df_trades["quote_slippage_usdt_sign"] = df_trades["quote_slippage_usdt_abs"] * np.sign(df_trades["qty_sign"])
+    df_trades["quote_slippage_sign"] = df_trades["quote_slippage_abs"] * np.sign(df_trades["qty_sign"])
 
     time_ub: pd.Timestamp = pump.time.floor("1h") - timedelta(hours=1)
 
@@ -79,151 +77,21 @@ def transform_to_features_30(
         close=("price_last", "last"),
         low=("price_min", "min"),
         high=("price_max", "max"),
-        num_trades=("quote_usdt_abs", "count"),
+        num_trades=("quote_abs", "count"),
         num_long_trades=("is_long", "sum"),
-        quote_usdt_abs=("quote_usdt_abs", "sum"),
-        quote_usdt_sign=("quote_usdt_sign", "sum"),
-        quote_usdt_long=("quote_usdt_long", "sum"),
-        quote_slippage_usdt_abs=("quote_slippage_usdt_abs", "sum"),
-        quote_slippage_usdt_sign=("quote_slippage_usdt_sign", "sum")
+        quote_abs=("quote_abs", "sum"),
+        quote_sign=("quote_sign", "sum"),
+        quote_long=("quote_long", "sum"),
+        quote_slippage_abs=("quote_slippage_abs", "sum"),
+        quote_slippage_sign=("quote_slippage_sign", "sum")
     ).reset_index()
-
-    # ------------------------------------------------------------------------------------------------------------------------------------
-    # AUC Features - 1D Volume AUC
-    # ------------------------------------------------------------------------------------------------------------------------------------
-    df_1d: pd.DataFrame = df_candles_1h[
-        df_candles_1h["time"] >= time_ub - timedelta(days=1)
-    ].copy()
-
-    df_1d_r = df_1d.iloc[::-1].copy()
-    df_1d_r["quote_usdt_abs_share"] = df_1d_r["quote_usdt_abs"].cumsum() / df_1d_r["quote_usdt_abs"].sum()
-
-    X = np.linspace(0, 1, df_1d_r.shape[0])
-    auc_score: float = auc(x=X, y=df_1d_r["quote_usdt_abs_share"])
-    all_features["quote_usdt_abs_auc_1d"] = auc_score
-
-    # ------------------------------------------------------------------------------------------------------------------------------------
-    # AUC Features - 12H Volume AUC
-    # ------------------------------------------------------------------------------------------------------------------------------------
-    df_12h: pd.DataFrame = df_candles_1h[
-        df_candles_1h["time"] >= time_ub - timedelta(hours=12)
-    ].copy()
-
-    df_12h_r = df_12h.iloc[::-1].copy()
-    df_12h_r["quote_usdt_abs_share"] = df_12h_r["quote_usdt_abs"].cumsum() / df_12h_r["quote_usdt_abs"].sum()
-
-    X = np.linspace(0, 1, df_12h_r.shape[0])
-    auc_score: float = auc(x=X, y=df_12h_r["quote_usdt_abs_share"])
-    all_features["quote_usdt_abs_auc_12h"] = auc_score
-
-    # ------------------------------------------------------------------------------------------------------------------------------------
-    # AUC Features - 12H Long quote volume share AUC
-    # ------------------------------------------------------------------------------------------------------------------------------------
-    df_12h_r["quote_usdt_long_share"] = df_12h_r["quote_usdt_long"].cumsum() / df_12h_r["quote_usdt_long"].sum()
-
-    X = np.linspace(0, 1, df_12h_r.shape[0])
-    auc_score: float = auc(x=X, y=df_12h_r["quote_usdt_long_share"])
-    all_features["long_quote_share_auc_12h"] = auc_score
-
-    # ------------------------------------------------------------------------------------------------------------------------------------
-    # AUC Features - 12H Long num trades share AUC
-    # ------------------------------------------------------------------------------------------------------------------------------------
-    df_12h_r["num_long_trades_share"] = df_12h_r["num_long_trades"].cumsum() / df_12h_r["num_long_trades"].sum()
-
-    X = np.linspace(0, 1, df_12h_r.shape[0])
-    auc_score: float = auc(x=X, y=df_12h_r["num_long_trades_share"])
-    all_features["long_num_trades_share_auc_12h"] = auc_score
-
-    # ------------------------------------------------------------------------------------------------------------------------------------
-    # AUC Features - 12H Quote slippage share AUC
-    # ------------------------------------------------------------------------------------------------------------------------------------
-    df_12h_r["quote_slippage_usdt_abs_share"] = df_12h_r["quote_slippage_usdt_abs"].cumsum() / df_12h_r["quote_slippage_usdt_abs"].sum()
-
-    X = np.linspace(0, 1, df_12h_r.shape[0])
-    auc_score: float = auc(x=X, y=df_12h_r["quote_slippage_usdt_abs_share"])
-    all_features["quote_slippage_share_auc_12h"] = auc_score
-
-    # ------------------------------------------------------------------------------------------------------------------------------------
-    # AUC Features - SINCOS time features
-    # ------------------------------------------------------------------------------------------------------------------------------------
-    total_day_seconds = 24*60*60
-
-    df_trades["day_seconds_elapsed"] = pd.to_timedelta(
-        df_trades["time"].dt.time.astype(str)
-    ).dt.total_seconds()
-
-    df_trades["sin_time"] = np.sin(2*np.pi*df_trades.day_seconds_elapsed / total_day_seconds)
-    df_trades["cos_time"] = np.cos(2*np.pi*df_trades.day_seconds_elapsed / total_day_seconds)
-    df_trades["time_diff"] = df_trades["time"].diff().dt.total_seconds()
-
-    df_trades = df_trades.dropna()
-
-    df_trades_7d: pd.DataFrame = df_trades[
-        df_trades["time"] >= time_ub - timedelta(days=7)
-    ].copy()
-    df_trades_7d["arctan_time"] = np.arctan2(df_trades_7d["sin_time"], df_trades_7d["cos_time"])
-
-    df_circle: pd.DataFrame = df_trades_7d.copy()
-    N = df_circle.shape[0]
-
-    X = np.linspace(0, 1, N)
-
-    df_circle = df_circle.sort_values(by="arctan_time", ascending=True).reset_index(drop=True)
-    df_circle["cumsum_ratio"] = df_circle["quote_usdt_abs"].cumsum() / df_circle["quote_usdt_abs"].sum()
-
-    deviation_auc = auc(x=X, y=np.abs(df_circle["cumsum_ratio"] - X))
-    
-    all_features["deviation_arctan_time_quote_usdt_abs_7d_auc"] = deviation_auc
-    
-    # ------------------------------------------------------------------------------------------------------------------------------------
-    # AUC Features - Imbalance ratio AUC 7d daily
-    # ------------------------------------------------------------------------------------------------------------------------------------
-    df_imbalance: pd.DataFrame = df_trades_7d.resample(on="time", rule="1d").agg(
-        quote_usdt_sign=("quote_usdt_sign", "sum"),
-        quote_usdt_abs=("quote_usdt_abs", "sum")
-    )
-
-    df_imbalance["imbalance_ratio"] = df_imbalance["quote_usdt_sign"] / df_imbalance["quote_usdt_abs"]
-    X = np.linspace(0, 1, df_imbalance.shape[0])
-    auc_score: float = auc(x=X, y=df_imbalance["imbalance_ratio"])
-    all_features["imbalance_ratio_7d_auc"] = auc_score
-
-    # ------------------------------------------------------------------------------------------------------------------------------------
-    # AUC Features - Imbalance ratio AUC 12h hourly
-    # ------------------------------------------------------------------------------------------------------------------------------------
-    df_12h["imbalance_ratio"] = df_12h["quote_usdt_sign"] / df_12h["quote_usdt_abs"]
-
-    X = np.linspace(0, 1, df_12h.shape[0])
-
-    auc_score: float = auc(x=X, y=df_12h["imbalance_ratio"])
-    all_features["imbalance_ratio_12h_auc"] = auc_score
-
-    # ------------------------------------------------------------------------------------------------------------------------------------
-    # AUC Features - Gini index of quote abs
-    # ------------------------------------------------------------------------------------------------------------------------------------
-    quantiles: np.array = np.linspace(0.01, 1, 100)
-    vol_shares: List[float] = []
-
-    overall_vol: float = df_trades_7d["quote_usdt_abs"].sum()
-
-    for quan in quantiles:
-        vol_abs: float = df_trades_7d[
-            df_trades_7d["quote_usdt_abs"] <= df_trades_7d["quote_usdt_abs"].quantile(quan)
-        ]["quote_usdt_abs"].sum()
-        vol_shares.append(
-            vol_abs / overall_vol
-        )
-
-    lorenz_auc: float = auc(x=quantiles, y=vol_shares)
-    gini_index: float = (0.5 - lorenz_auc) / 0.5
-    all_features["gini_index_quote_usdt_abs_7d"] = gini_index
 
     # ------------------------------------------------------------------------------------------------------------------------------------
     # Interval-based Log returns features
     # ------------------------------------------------------------------------------------------------------------------------------------
-    df_candles_1h["imbalance_ratio"] = df_candles_1h["quote_usdt_sign"] / df_candles_1h["quote_usdt_abs"]
+    df_candles_1h["imbalance_ratio"] = df_candles_1h["quote_sign"] / df_candles_1h["quote_abs"]
     df_candles_1h["long_trades_ratio"] = df_candles_1h["num_long_trades"] / df_candles_1h["num_trades"]
-    df_candles_1h["quote_slippage_imbalance_ratio"] = df_candles_1h["quote_slippage_usdt_sign"] / df_candles_1h["quote_slippage_usdt_abs"]
+    df_candles_1h["quote_slippage_imbalance_ratio"] = df_candles_1h["quote_slippage_sign"] / df_candles_1h["quote_slippage_abs"]
 
     # calculate log returns
     df_candles_1h["close"] = df_candles_1h["close"].ffill()
@@ -248,7 +116,7 @@ def transform_to_features_30(
     for offset, label in zip(offsets, labels):
         df_interval = df_candles_1h[
             df_candles_1h["time"] >= time_ub - offset
-        ].copy()
+        ]
 
         # Share of long trades scaled by long run moments 
         hourly_features[f"long_trades_1h_ratio_zscore_{label}"] = (
@@ -264,19 +132,19 @@ def transform_to_features_30(
         hourly_features[f"log_returns_1h_zscore_{label}"] = df_interval["log_returns"].mean() / df_30d["log_returns"].std()
         hourly_features[f"log_returns_1h_std_{label}"] = df_interval["log_returns"].std()
 
-        hourly_features[f"quote_usdt_abs_1h_zscore_{label}"] = (
-            df_interval["quote_usdt_abs"].mean() - df_30d["quote_usdt_abs"].mean()
-        ) / df_30d["quote_usdt_abs"].std()
+        hourly_features[f"quote_abs_1h_zscore_{label}"] = (
+            df_interval["quote_abs"].mean() - df_30d["quote_abs"].mean()
+        ) / df_30d["quote_abs"].std()
 
         # Quote slippage features
         hourly_features[f"quote_slippage_imbalance_ratio_1h_mean_{label}"] = df_interval["quote_slippage_imbalance_ratio"].mean()
         hourly_features[f"quote_slippage_imbalance_ratio_1h_std_{label}"] = df_interval["quote_slippage_imbalance_ratio"].std()
         # find slippage imbalance ratio over the whole interval
         hourly_features[f"quote_slippage_imbalance_ratio_1h_overall_{label}"] = (
-            df_interval["quote_slippage_usdt_sign"].sum() / df_interval["quote_slippage_usdt_abs"].sum()
+            df_interval["quote_slippage_sign"].sum() / df_interval["quote_slippage_abs"].sum()
         )
         # Share of slippage in the whole volume
-        hourly_features[f"quote_slippage_1h_quote_usdt_abs_ratio_{label}"] = df_interval["quote_slippage_usdt_abs"].sum() / df_interval["quote_usdt_abs"].sum()
+        hourly_features[f"quote_slippage_1h_quote_abs_ratio_{label}"] = df_interval["quote_slippage_abs"].sum() / df_interval["quote_abs"].sum()
 
     all_features.update(hourly_features)
 
@@ -288,17 +156,17 @@ def transform_to_features_30(
     for offset, label in zip(offsets, labels):
         df_interval: pd.DataFrame = df_trades[
             (df_trades["time"] >= time_ub - offset)
-        ].copy()
+        ]
 
-        # Compute alpha of powerlaw distribution for quote_usdt_abs, quote_usdt_long, quote_short
-        powerlaw_features[f"quote_usdt_abs_powerlaw_alpha_{label}"] = powerlaw.fit(df_interval["quote_usdt_abs"])[0]
+        # Compute alpha of powerlaw distribution for quote_abs, quote_long, quote_short
+        powerlaw_features[f"quote_abs_powerlaw_alpha_{label}"] = powerlaw.fit(df_interval["quote_abs"])[0]
         # alpha for long trades
-        powerlaw_features[f"long_quote_usdt_abs_powerlaw_alpha_{label}"] = powerlaw.fit(
-            df_interval[df_interval["is_long"]]["quote_usdt_abs"]
+        powerlaw_features[f"long_quote_abs_powerlaw_alpha_{label}"] = powerlaw.fit(
+            df_interval[df_interval["is_long"]]["quote_abs"]
         )[0]
         # alpha for short trades
-        powerlaw_features[f"short_quote_usdt_abs_powerlaw_alpha_{label}"] = powerlaw.fit(
-            df_interval[~df_interval["is_long"]]["quote_usdt_abs"]
+        powerlaw_features[f"short_quote_abs_powerlaw_alpha_{label}"] = powerlaw.fit(
+            df_interval[~df_interval["is_long"]]["quote_abs"]
         )[0]
 
     all_features.update(powerlaw_features)
@@ -311,7 +179,7 @@ def transform_to_features_30(
     for offset, label in zip(offsets, labels):
         df_interval: pd.DataFrame = df_trades[
             (df_trades["time"] >= pump.time.floor("1h") - offset)
-        ].copy()
+        ]
 
         # Benford correlation
         benford_features[f"benford_law_correlation_{label}"] = benford_correlation(df_interval["qty_abs"])
@@ -326,28 +194,24 @@ def transform_to_features_30(
     for offset, label in zip(offsets, labels):
         df_interval: pd.DataFrame = df_trades[
             (df_trades["time"] >= time_ub - offset)
-        ].copy()
-
-        df_long: pd.DataFrame = df_interval[df_interval["is_long"]].copy()
-        df_short: pd.DataFrame = df_interval[~df_interval["is_long"]].copy()
+        ]
+        df_long: pd.DataFrame = df_interval[df_interval["is_long"]]
+        df_short: pd.DataFrame = df_interval[~df_interval["is_long"]]
 
         # 999 quantiles
-        long_whale_quantile: float = df_long["quote_usdt_abs"].quantile(.999)
-        short_whale_quantile: float = df_short["quote_usdt_abs"].quantile(.999)
-        whale_quantile: float = df_interval["quote_usdt_sign"].quantile(.999)
+        long_whale_quantile: float = df_long["quote_abs"].quantile(.999)
+        short_whale_quantile: float = df_short["quote_abs"].quantile(.999)
 
         # 99 quantiles
-        long_99_quantile: float = df_long["quote_usdt_abs"].quantile(.99)
-        short_99_quantile: float = df_short["quote_usdt_abs"].quantile(.99)
-        quantile_99: float = df_interval["quote_usdt_sign"].quantile(.99)
+        long_99_quantile: float = df_long["quote_abs"].quantile(.99)
+        short_99_quantile: float = df_short["quote_abs"].quantile(.99)
 
         # 95 quantiles
-        long_95_quantile: float = df_long["quote_usdt_abs"].quantile(.95)
-        short_95_quantile: float = df_short["quote_usdt_abs"].quantile(.95)
-        quantile_95: float = df_interval["quote_usdt_sign"].quantile(.95)
+        long_95_quantile: float = df_long["quote_abs"].quantile(.95)
+        short_95_quantile: float = df_short["quote_abs"].quantile(.95)
 
-        long_median_quote: float = df_long["quote_usdt_abs"].median()
-        short_nedian_quote: float = df_short["quote_usdt_abs"].median()
+        long_median_quote: float = df_long["quote_abs"].median()
+        short_nedian_quote: float = df_short["quote_abs"].median()
 
         quote_features[f"long_whale_99_ratio_{label}"] = long_whale_quantile / long_99_quantile # how spread out long quantiles become
         quote_features[f"short_whale_99_ratio_{label}"] = short_whale_quantile / short_99_quantile
@@ -372,12 +236,12 @@ def transform_to_features_30(
         close=("price_last", "last"),
         low=("price_min", "min"),
         high=("price_max", "max"),
-        num_trades=("quote_usdt_abs", "count"),
+        num_trades=("quote_abs", "count"),
         num_long_trades=("is_long", "sum"),
-        quote_usdt_abs=("quote_usdt_abs", "sum"),
-        quote_usdt_sign=("quote_usdt_sign", "sum"),
-        quote_slippage_usdt_abs=("quote_slippage_usdt_abs", "sum"),
-        quote_slippage_usdt_sign=("quote_slippage_usdt_sign", "sum")
+        quote_abs=("quote_abs", "sum"),
+        quote_sign=("quote_sign", "sum"),
+        quote_slippage_abs=("quote_slippage_abs", "sum"),
+        quote_slippage_sign=("quote_slippage_sign", "sum")
     ).reset_index()
 
     empty_features: Dict[str, float] = {}
@@ -385,7 +249,7 @@ def transform_to_features_30(
     for offset, label in zip(offsets, labels):
         df_interval: pd.DataFrame = df_candles_1min[
             (df_candles_1min["time"] >= time_ub - offset)
-        ].copy()
+        ]
 
         empty_features[f"empty_trading_minutes_ratio_{label}"] = df_interval[df_interval["num_trades"] == 0].shape[0] / df_interval.shape[0]
 
@@ -407,24 +271,24 @@ def transform_to_features_30(
     for offset, label in zip(offsets, labels):
         df_interval: pd.DataFrame = df_trades_1d[
             df_trades_1d["time"] >= time_ub - offset
-        ].copy()
+        ]
 
-        df_long: pd.DataFrame = df_interval[df_interval["is_long"]].copy()
-        df_short: pd.DataFrame = df_interval[~df_interval["is_long"]].copy()
+        df_long: pd.DataFrame = df_interval[df_interval["is_long"]]
+        df_short: pd.DataFrame = df_interval[~df_interval["is_long"]]
 
         # Share of long trades within the time interval and the whole day 
         short_features[f"long_trades_ratio_{label}"] = df_interval["is_long"].sum() / df_interval.shape[0]
         short_features[f"long_trades_ratio_{label}_1d"] = df_interval["is_long"].sum() / df_trades_1d.shape[0]
         # Share of volume within the time interval and the whole day
-        short_features[f"quote_usdt_abs_ratio_{label}_1d"] = df_interval["quote_usdt_abs"].sum() / df_trades_1d["quote_usdt_abs"].sum()
-        short_features[f"quote_usdt_abs_long_ratio_{label}_1d"] = df_long["quote_usdt_abs"].sum() / df_interval["quote_usdt_abs"].sum()
+        short_features[f"quote_abs_ratio_{label}_1d"] = df_interval["quote_abs"].sum() / df_trades_1d["quote_abs"].sum()
+        short_features[f"quote_abs_long_ratio_{label}_1d"] = df_long["quote_abs"].sum() / df_interval["quote_abs"].sum()
         # Imbalance ratio
-        short_features[f"imbalance_ratio_{label}"] = df_interval["quote_usdt_sign"].sum() / df_interval["quote_usdt_abs"].sum()
+        short_features[f"imbalance_ratio_{label}"] = df_interval["quote_sign"].sum() / df_interval["quote_abs"].sum()
         # Quote slippage features
-        short_features[f"quote_slippage_ratio_{label}_1d"] = df_interval["quote_slippage_usdt_abs"].sum() / df_trades_1d["quote_slippage_usdt_abs"].sum() # share of overall slippage
-        short_features[f"quote_slippage_imbalance_ratio_{label}"] = df_interval["quote_slippage_usdt_sign"].sum() / df_interval["quote_slippage_usdt_abs"].sum()
+        short_features[f"quote_slippage_ratio_{label}_1d"] = df_interval["quote_slippage_abs"].sum() / df_trades_1d["quote_slippage_abs"].sum() # share of overall slippage
+        short_features[f"quote_slippage_imbalance_ratio_{label}"] = df_interval["quote_slippage_sign"].sum() / df_interval["quote_slippage_abs"].sum()
         # Share of slippage quote compared to volume
-        short_features[f"quote_slippage_quote_usdt_abs_ratio_{label}"] = df_interval["quote_slippage_usdt_abs"].sum() / df_interval["quote_usdt_abs"].sum()
+        short_features[f"quote_slippage_quote_abs_ratio_{label}"] = df_interval["quote_slippage_abs"].sum() / df_interval["quote_abs"].sum()
 
     all_features.update(short_features)
 

@@ -166,7 +166,12 @@ class DataLoader(ABC):
 
         return map_exchange_df
     
-
+    
+    @abstractmethod
+    def modify_daily_data(self, df: pd.DataFrame, pump: PumpEvent, date: pd.Timestamp) -> pd.DataFrame:
+        """Hook into data downloader"""
+        
+    
     def load_data(self, ticker: str, pump: PumpEvent) -> pd.DataFrame: 
         """Load data pd.DataFrame from trades_dir/exchange/ticker folder"""
         time_ub: pd.Timestamp = pump.time.floor("1h") - timedelta(hours=1)
@@ -189,26 +194,7 @@ class DataLoader(ABC):
                 df_date["time"] = pd.to_datetime(df_date["time"], unit="ms")
                 df_date["time"] = df_date["time"].dt.tz_localize(None)
 
-                #  load BTCUSDT data for this date and add BTC open/close price to the df_date dataset
-                df_btc: pd.DataFrame = pd.read_parquet(
-                    os.path.join(self.trades_dir, "binance", "BTCUSDT", f"BTCUSDT-trades-{str(date.date())}.parquet")
-                )
-                df_btc["time"] = pd.to_datetime(df_btc["time"], unit="ms")
-                df_btc["time"] = df_btc["time"].dt.tz_localize(None)
-
-                # Create 1s candles
-                df_btc: pd.DataFrame = df_btc.resample(on="time", rule="1s").agg(
-                    open=("price", "first"),
-                    close=("price", "last")
-                ).reset_index()
-
-                df_btc = df_btc.rename(columns={"time": "time_sec"})
-                df_date["time_sec"] = df_date["time"].dt.floor("1s")
-                
-                df_date = df_date.merge(
-                    df_btc, on="time_sec", how="left"
-                )
-
+                df_date = self.modify_daily_data(df=df_date, pump=pump, date=date)
                 df = pd.concat([df, df_date])
 
         df["time"] = pd.to_datetime(df["time"], unit="ms")
@@ -279,13 +265,17 @@ class DataLoader(ABC):
 
             pump: PumpEvent
             df_crosssection: pd.DataFrame
+
             pump, df_crosssection = self.create_crosssection(pump=pump)
 
             if not df_crosssection.empty:
-                df_crosssection.to_parquet(
-                    self.output_path, compression="gzip", engine="fastparquet", 
-                    append=os.path.exists(self.output_path), index=False
-                )
+                try:
+                    df_crosssection.to_parquet(
+                        self.output_path, compression="gzip", engine="fastparquet", 
+                        append=os.path.exists(self.output_path), index=False
+                    )
+                except:
+                    pass
 
             self.task_stack.pop(pump)
 
@@ -299,9 +289,7 @@ class DataLoader(ABC):
             results = []
 
             for pump in self.pumps:
-                res: AsyncResult = pool.apply_async(
-                    partial(self.create_crosssection, pump=pump)
-                )
+                res: AsyncResult = pool.apply_async(partial(self.create_crosssection, pump=pump))
                 results.append(res)
 
             for res in results:
@@ -315,7 +303,7 @@ class DataLoader(ABC):
                         self.output_path, compression="gzip", engine="fastparquet",
                         append=os.path.exists(self.output_path),
                     )
-                except ValueError:
+                except:
                     pass
 
                 self.task_stack.pop(pump)
