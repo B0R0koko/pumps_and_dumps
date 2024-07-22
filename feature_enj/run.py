@@ -1,6 +1,6 @@
 from typing import List
 from pipes.dataloader import DataLoader, PumpEvent
-from features.features_26_05 import transform_to_features
+from features.features_19_06 import transform_to_features
 from datetime import timedelta
 
 import pandas as pd
@@ -87,34 +87,6 @@ class Loader(DataLoader):
         return df_features
     
 
-    def modify_daily_data(self, df: pd.DataFrame, pump: PumpEvent, date: pd.Timestamp) -> pd.DataFrame:
-        # Convert quote assets to USDT
-        #  load BTCUSDT data for this date and add BTC open/close price to the df dataset
-        # if exchange is Kucoin, then there is no need to convert to USDT as everything is in USDT
-        # if pump.exchange == "kucoin":
-        #     return df
-        
-        # # For binance get BTCUSDT and convert BTC to USDT 
-        # df_btc: pd.DataFrame = pd.read_parquet(
-        #     os.path.join(self.trades_dir, "binance", "BTCUSDT", f"BTCUSDT-trades-{str(date.date())}.parquet")
-        # )
-        # df_btc["time"] = pd.to_datetime(df_btc["time"], unit="ms")
-        # df_btc["time"] = df_btc["time"].dt.tz_localize(None)
-
-        # # Create 1s candles
-        # df_btc: pd.DataFrame = df_btc.resample(on="time", rule="1s").agg(
-        #     open=("price", "first"),
-        #     close=("price", "last")
-        # ).reset_index()
-
-        # df_btc = df_btc.rename(columns={"time": "time_sec"})
-        # df["time_sec"] = df["time"].dt.floor("1s")
-        
-        # df = df.merge(df_btc, on="time_sec", how="left")
-
-        return df
-        
-
     def create_features(self, pump: PumpEvent, df_ticker: pd.DataFrame, ticker: str) -> pd.DataFrame:
         # Perform all feature engineering here
         base_asset: str = re.sub(r"(BTC)$", "", ticker)
@@ -125,23 +97,27 @@ class Loader(DataLoader):
             (self.df_cmc_snapshots["date"] >= pump.time.floor("1d") - self.lookback_period)
         ].copy()
 
-        df_ticker_features: pd.DataFrame = transform_to_features(
-            df_ticker=df_ticker, pump=pump, df_cmc_ticker=df_cmc_ticker, ticker=ticker
-        )
-        return df_ticker_features
+        try:
+            df_ticker_features: pd.DataFrame = transform_to_features(
+                df_ticker=df_ticker, pump=pump, df_cmc_ticker=df_cmc_ticker, ticker=ticker
+            )
+            return df_ticker_features
+        except:
+            return pd.DataFrame()
 
 if __name__ == "__main__":
 
     loader = Loader(
         trades_dir="data/trades_parquet",
-        output_path="data/datasets/train_26_05.parquet",
+        output_path="data/datasets/train_26_06.parquet",
         cmc_snapshots_file="data/cmc/cmc_snapshots.csv",
-        labeled_pumps_file="data/pumps/pumps_31_03_2024.json",
-        lookback_period=timedelta(days=14),
+        labeled_pumps_file="data/pumps/pumps_27_05_2024.json",
+        lookback_period=timedelta(days=30),
         warm_start=False,
         progress_file="feature_enj/progress.json",
-        n_workers=5,
-        use_exchanges=["binance"]
+        n_workers=7,
+        use_exchanges=["binance"],
+        use_quotes=["BTC"]
     )
 
     loader.run()

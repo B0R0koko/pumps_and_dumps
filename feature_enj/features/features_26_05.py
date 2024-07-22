@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import os
 import warnings
+import gc
 
 
 warnings.filterwarnings("ignore")
@@ -69,26 +70,18 @@ def transform_to_features(
 
 
     time_ub: pd.Timestamp = pump.time.floor("1h") - timedelta(hours=1)
-    df_train = df_trades[df_trades["time"] <= time_ub].copy()
+    df_trades = df_trades[df_trades["time"] <= time_ub].copy()
 
     # Interval based features
 
     hour_bins: List[int] = [1, 3, 12, 24, 36, 48, 60, 72]
 
-    df_72h = df_trades[
-        df_trades["time"] >= time_ub - timedelta(hours=72)
-    ].copy()
-
-    df_num_trades_72h: pd.DataFrame = df_72h.resample(on="time", rule="5min").agg(
-        num_trades=("is_long", "count")
-    )
-
+    df_72h = df_trades[df_trades["time"] >= time_ub - timedelta(hours=72)].copy()
 
     features_3d: Dict[str, float] = {}
 
-
     for hour in hour_bins:
-        df_interval: pd.DataFrame = df_train[df_train["time"] >= time_ub - timedelta(hours=hour)].copy()
+        df_interval: pd.DataFrame = df_trades[df_trades["time"] >= time_ub - timedelta(hours=hour)].copy()
 
         # Number of trades features
         long_short_trades_ratio: float = df_interval["is_long"].sum() / (~df_interval["is_long"]).sum()
@@ -108,16 +101,10 @@ def transform_to_features(
         quote_slippage_long_short_ratio: float = (
             df_interval["quote_slippage_abs_long"].sum() / df_interval["quote_slippage_abs_short"].sum()
         )
-        quote_slippage_long_share: float = df_interval["quote_slippage_abs_long"].sum() / df_72h["quote_slippage_abs_long"]
+        quote_slippage_long_share: float = df_interval["quote_slippage_abs_long"].sum() / df_72h["quote_slippage_abs_long"].sum()
         
         # Share of slippages in overall volume
         quote_slippage_quote_share: float = df_interval["quote_slippage_abs"].sum() / df_interval["quote_abs"].sum()
-
-        # Empty trading bins - count how many trading bins were empty (no trades)
-        df_num_trades: pd.DataFrame = df_interval.resample(on="time", rule="5min").agg(
-            num_trades=("is_long", "count")
-        )
-        empty_5m_bins_share = df_num_trades[df_num_trades["num_trades"] == 0].shape[0] / df_num_trades.shape[0]
 
         # Add features
         features_3d.update({
@@ -134,11 +121,13 @@ def transform_to_features(
             f"quote_slippage_share_{hour}h_72H": quote_slippage_share,
             f"quote_slippage_long_short_ratio_{hour}h": quote_slippage_long_short_ratio,
             f"quote_slippage_quote_share_{hour}h_72H": quote_slippage_quote_share,
-
-            f"empty_5m_bins_share_{hour}h": empty_5m_bins_share,
+            f"quote_slippage_long_{hour}h_72H": quote_slippage_long_share,
         })
 
     all_features.update(features_3d)
+    
+    del df_72h
+    gc.collect()
 
 
     daily_bins: List[int] = [1, 2, 3, 5, 7, 14]
@@ -146,7 +135,7 @@ def transform_to_features(
 
 
     for days in daily_bins:
-        df_interval: pd.DataFrame = df_train[df_train["time"] >= time_ub - timedelta(days=days)].copy()
+        df_interval: pd.DataFrame = df_trades[df_trades["time"] >= time_ub - timedelta(days=days)].copy()
 
         alpha_quote_abs: float = powerlaw.fit(df_interval["quote_abs"])[0]
         alpha_quote_abs_long: float = powerlaw.fit(df_interval["quote_long"])[0]
@@ -160,7 +149,8 @@ def transform_to_features(
 
     all_features.update(features_powerlaw)
 
-    df_candles_1h: pd.DataFrame = df_train.resample(
+    
+    df_candles_1h: pd.DataFrame = df_trades.resample(
         on="time", rule="1h", label="left", closed="left"
     ).agg(
         open=("price_first", "first"),

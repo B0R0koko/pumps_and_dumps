@@ -63,7 +63,8 @@ class DataLoader(ABC):
         warm_start: bool = False,
         progress_file: str = "feature_enj/progress.json",
         n_workers: int = 5,
-        use_exchanges: List[str] = ["binance", "kucoin"]
+        use_exchanges: List[str] = ["binance", "kucoin"],
+        use_quotes: List[str] = ["BTC"]
     ) -> Self:
         
         self.trades_dir: str = trades_dir
@@ -76,6 +77,7 @@ class DataLoader(ABC):
         self.progress_file: str = progress_file
         self.n_workers: int = n_workers
         self.use_exchanges: List[str] = use_exchanges
+        self.use_quotes: List[str] = use_quotes
 
 
         self.available_timeframes: Dict[str, pd.DataFrame] = self.get_available_timeframes()
@@ -142,11 +144,19 @@ class DataLoader(ABC):
         """
         map_exchange_df: Dict[str, pd.DataFrame] = {}
         for exchange in os.listdir(self.trades_dir):
-            exchange_dir: str = os.path.join(self.trades_dir, exchange)
 
+            if exchange not in self.use_exchanges:
+                continue
+
+            exchange_dir: str = os.path.join(self.trades_dir, exchange)
             exchange_data = []
 
             for ticker in os.listdir(exchange_dir):
+                # Make sure that we only store available timeframes for quotes that we actually want
+                # to save RAM
+                if not any([ticker.endswith(quote) for quote in self.use_quotes]):
+                    continue
+
                 ticker_files: List[str] = os.listdir(os.path.join(exchange_dir, ticker))
 
                 available_dates: List[datetime] = [
@@ -167,18 +177,16 @@ class DataLoader(ABC):
         return map_exchange_df
     
     
-    @abstractmethod
-    def modify_daily_data(self, df: pd.DataFrame, pump: PumpEvent, date: pd.Timestamp) -> pd.DataFrame:
-        """Hook into data downloader"""
-        
-    
     def load_data(self, ticker: str, pump: PumpEvent) -> pd.DataFrame: 
         """Load data pd.DataFrame from trades_dir/exchange/ticker folder"""
-        time_ub: pd.Timestamp = pump.time.floor("1h") - timedelta(hours=1)
 
+        end: pd.Timestamp = pump.time.round("1h") - timedelta(hours=1)
         # data is organized by days
         date_range: List[pd.Timestamp] = pd.date_range(
-            start=time_ub - self.lookback_period, end=time_ub, freq="D",
+            start=end - self.lookback_period, 
+            end=end, 
+            freq="D",
+            inclusive="both"
         ).tolist()
 
         df: pd.DataFrame = pd.DataFrame()
@@ -194,13 +202,12 @@ class DataLoader(ABC):
                 df_date["time"] = pd.to_datetime(df_date["time"], unit="ms")
                 df_date["time"] = df_date["time"].dt.tz_localize(None)
 
-                df_date = self.modify_daily_data(df=df_date, pump=pump, date=date)
                 df = pd.concat([df, df_date])
 
         df["time"] = pd.to_datetime(df["time"], unit="ms")
 
         return df[
-            (df["time"] >= time_ub - self.lookback_period) & (df["time"] <= time_ub)
+            (df["time"] >= end - self.lookback_period) & (df["time"] <= end)
         ]
 
     @abstractmethod
@@ -245,7 +252,10 @@ class DataLoader(ABC):
             tickers_iterable.set_description("Running in single process")
 
         for ticker in tickers_iterable:
-            df_ticker: pd.DataFrame = self.load_data(ticker=ticker, pump=pump)
+            try:
+                df_ticker: pd.DataFrame = self.load_data(ticker=ticker, pump=pump)
+            except:
+                continue
             # Apply preprocess before creating features
             df_ticker: pd.DataFrame = self.preprocess_data(df_ticker=df_ticker, ticker=ticker, pump=pump)
             df_features: pd.DataFrame = self.create_features(df_ticker=df_ticker, pump=pump, ticker=ticker)
@@ -262,20 +272,15 @@ class DataLoader(ABC):
 
         for pump in pbar:
             pbar.set_description(f"Creating crosssection for pump: {pump.ticker}")
-
             pump: PumpEvent
             df_crosssection: pd.DataFrame
-
             pump, df_crosssection = self.create_crosssection(pump=pump)
 
             if not df_crosssection.empty:
-                try:
-                    df_crosssection.to_parquet(
-                        self.output_path, compression="gzip", engine="fastparquet", 
-                        append=os.path.exists(self.output_path), index=False
-                    )
-                except:
-                    pass
+                df_crosssection.to_parquet(
+                    self.output_path, compression="gzip", engine="fastparquet", 
+                    append=os.path.exists(self.output_path), index=False
+                )
 
             self.task_stack.pop(pump)
 
@@ -298,13 +303,11 @@ class DataLoader(ABC):
                 df_crosssection: pd.DataFrame
                 pump, df_crosssection = res.get()
 
-                try:
+                if not df_crosssection.empty:
                     df_crosssection.to_parquet(
                         self.output_path, compression="gzip", engine="fastparquet",
                         append=os.path.exists(self.output_path),
                     )
-                except:
-                    pass
 
                 self.task_stack.pop(pump)
                 # update progress
