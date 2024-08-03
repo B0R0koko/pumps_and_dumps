@@ -62,7 +62,7 @@ def main() -> int:
 
     load_dotenv()
 
-    chat = "cryptopumps"
+    chat = "Kucoin_Binance_Gateio_Pumps"
 
     parser = TelegramMessageParser(
         api_hash=os.environ.get("API_HASH"),
