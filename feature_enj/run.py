@@ -1,4 +1,4 @@
-from typing import List
+from typing import *
 from pipes.dataloader import DataLoader, PumpEvent
 from datetime import timedelta
 from features.features_17_08.compute import transform_to_features
@@ -13,27 +13,12 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 class Loader(DataLoader):
 
-    def get_crosssection_tickers(self, pump: PumpEvent) -> List[str] | None:
-
-        TOP_CMC_RANK = 100
-
+    def get_crosssection_tickers(self, pump: PumpEvent) -> Optional[List[str]]:
         """
         For each pump we create a crosssection, we would like to create a crosssection using top-50 + tickers,
         otherwise we have to calculate metrics for tickers that are traded a lot => a lot of computation which is useless
         since such tickers will never be pumped in the first place
         """
-        self.df_cmc_snapshots["time_diff"] = (self.df_cmc_snapshots["date"] - pump.time).abs()  # abs timedelta
-
-        top_coins: List[str] = self.df_cmc_snapshots[
-            (self.df_cmc_snapshots["time_diff"] == self.df_cmc_snapshots["time_diff"].min())
-            & (self.df_cmc_snapshots["cmc_rank"] <= TOP_CMC_RANK)
-        ]["symbol"].tolist()
-
-        quote_asset: str = "BTC" if pump.exchange == "binance" else "USDT"
-        top_coins: List[str] = set([f"{el}{quote_asset}" for el in top_coins])
-
-        # create a set of tickers traded on pump.exchange within timeframe
-        # [pump.time - lookback_period, pump.time]
 
         df_timeframes: pd.DataFrame = self.available_timeframes[pump.exchange]
 
@@ -44,16 +29,9 @@ class Loader(DataLoader):
         collected_tickers: List[str] = df_timeframes[HAS_ENOUGH_DATA]["ticker"].tolist()
         collected_tickers: set = set([ticker for ticker in collected_tickers if ticker.endswith("BTC")])
 
-        if pump.ticker not in collected_tickers:
-            # if pumped ticker doesn't have enough data return no tickers
-            return
-        # intersect these tickers with ones form the shit_coins
-        tickers: List[str] = list(
-            (collected_tickers - top_coins)
-            | set([pump.ticker])  # remove top tickers and union add pumped ticker which has enough data
-        )
+        collected_tickers -= set(["ETHBTC"])
 
-        return tickers
+        return list(collected_tickers)
 
     def preprocess_data(self, df_ticker: pd.DataFrame, ticker: str, pump: PumpEvent) -> pd.DataFrame:
 
@@ -103,11 +81,11 @@ if __name__ == "__main__":
 
     loader = Loader(
         trades_dir="data/trades_parquet",
-        output_path="data/datasets/train_17_08.parquet",
+        output_path="data/datasets/train_17_08_top100_removed.parquet",
         cmc_snapshots_file="data/cmc/cmc_snapshots.csv",
         labeled_pumps_file="data/pumps/merged_pumps_15_08.json",
         lookback_period=timedelta(days=30),
-        warm_start=False,
+        warm_start=True,
         progress_file="feature_enj/progress.json",
         n_workers=10,
         use_exchanges=["binance"],
