@@ -5,3 +5,4 @@ data
 configs/
 __pycache__
 other
+*catboost_info*

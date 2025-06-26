@@ -1,14 +1,7 @@
-from typing import *
-from datetime import timedelta, datetime
-from pipes.dataloader import PumpEvent
-from features.features_17_08.features import *
-
-import pandas as pd
-import numpy as np
-import os
 import warnings
-import gc
 
+from feature_enj.features.features_17_08.features import *
+from feature_enj.pipes.dataloader import PumpEvent
 
 warnings.filterwarnings("ignore")
 
@@ -22,15 +15,14 @@ def check_num_times_has_been_pumped(pump: PumpEvent, ticker: str) -> int:
         (df_pumps["ticker"] == ticker)
         & (df_pumps["time"] >= pump.time.round("1h") - timedelta(hours=1) - timedelta(days=90))
         & (df_pumps["time"] < pump.time.round("1h") - timedelta(hours=1))
-    ].copy()
+        ].copy()
 
     return df_prev_pumps.shape[0]
 
 
 def transform_to_features(
-    df_ticker: pd.DataFrame, pump: PumpEvent, df_cmc_ticker: pd.DataFrame, ticker: str
+        df_ticker: pd.DataFrame, pump: PumpEvent, df_cmc_ticker: pd.DataFrame, ticker: str
 ) -> pd.DataFrame:
-
     all_features: Dict[str, float] = {}
 
     df_ticker["quote"] = df_ticker["qty"] * df_ticker["price"]
@@ -83,14 +75,15 @@ def transform_to_features(
     # long run mean and std of volumes in base and quote
     df_hourly_lr: pd.DataFrame = df_hourly_candles[
         df_hourly_candles["volume_quote_abs"] <= df_hourly_candles["volume_quote_abs"].quantile(0.99)
-    ].copy()
+        ].copy()
 
     hour_offsets: List[int] = [1, 6, 24, 48, 72, 7 * 24, 14 * 24]
 
     hourly_features: Dict[str, float] = {}
 
     for offset in hour_offsets:
-        df_window: pd.DataFrame = df_hourly_candles[df_hourly_candles["time"] >= time_ub - timedelta(hours=offset)].copy()
+        df_window: pd.DataFrame = df_hourly_candles[
+            df_hourly_candles["time"] >= time_ub - timedelta(hours=offset)].copy()
 
         hourly_features[f"overall_return_{offset}h"] = calc_overall_return(df_window=df_window)
         # Scaled volumes in base and quote assets
@@ -117,12 +110,13 @@ def transform_to_features(
 
     df_hourly_candles_120h: pd.DataFrame = df_hourly_candles[
         df_hourly_candles["time"] >= time_ub - timedelta(hours=120)
-    ].copy()
+        ].copy()
 
     hour_offsets: List[int] = [1, 3, 6, 12, 24, 48, 60]
 
     for offset in hour_offsets:
-        df_window: pd.DataFrame = df_hourly_candles[df_hourly_candles["time"] >= time_ub - timedelta(hours=offset)].copy()
+        df_window: pd.DataFrame = df_hourly_candles[
+            df_hourly_candles["time"] >= time_ub - timedelta(hours=offset)].copy()
         # Share of overall slippages of this time window in 120hours
         slippage_features[f"quote_slippage_abs_share_{offset}h_120h"] = calc_quote_slippage_abs_share(
             df_window=df_window, df_hourly_candles_120h=df_hourly_candles_120h
@@ -136,10 +130,11 @@ def transform_to_features(
     for offset in hour_offsets:
         df_window: pd.DataFrame = df_trades[df_trades["time"] >= time_ub - timedelta(hours=offset)].copy()
         # Volume imbalance ratio to see if there is more buying pressure
-        imbalance_features[f"quote_imbalance_ratio_{offset}h"] = df_window["quote_sign"].sum() / df_window["quote_abs"].sum()
+        imbalance_features[f"quote_imbalance_ratio_{offset}h"] = df_window["quote_sign"].sum() / df_window[
+            "quote_abs"].sum()
         # Imbalance ratio in slippages to see if there is skew towards long slippages
         imbalance_features[f"quote_slippage_imbalance_ratio_{offset}h"] = (
-            df_window["quote_slippage_sign"].sum() / df_window["quote_slippage_abs"].sum()
+                df_window["quote_slippage_sign"].sum() / df_window["quote_slippage_abs"].sum()
         )
 
     all_features.update(imbalance_features)

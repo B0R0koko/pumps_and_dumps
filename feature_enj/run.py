@@ -1,12 +1,12 @@
-from typing import *
-from pipes.dataloader import DataLoader, PumpEvent
-from datetime import timedelta
-from features.features_17_08.compute import transform_to_features
-import pandas as pd
 import re
-import os
 import warnings
+from datetime import timedelta
+from typing import *
 
+import pandas as pd
+
+from features.features_17_08.compute import transform_to_features
+from pipes.dataloader import DataLoader, PumpEvent
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -23,7 +23,7 @@ class Loader(DataLoader):
         df_timeframes: pd.DataFrame = self.available_timeframes[pump.exchange]
 
         HAS_ENOUGH_DATA: pd.Series[bool] = (df_timeframes["available_from"] <= (pump.time - self.lookback_period)) & (
-            pump.time <= df_timeframes["available_to"]
+                pump.time <= df_timeframes["available_to"]
         )
 
         collected_tickers: List[str] = df_timeframes[HAS_ENOUGH_DATA]["ticker"].tolist()
@@ -66,7 +66,7 @@ class Loader(DataLoader):
             (self.df_cmc_snapshots["symbol"] == base_asset)
             & (self.df_cmc_snapshots["date"] < pump.time.floor("1d"))
             & (self.df_cmc_snapshots["date"] >= pump.time.floor("1d") - self.lookback_period)
-        ].copy()
+            ].copy()
 
         try:
             df_ticker_features: pd.DataFrame = transform_to_features(
@@ -78,7 +78,6 @@ class Loader(DataLoader):
 
 
 if __name__ == "__main__":
-
     loader = Loader(
         trades_dir="data/trades_parquet",
         output_path="data/datasets/train_17_08_top100_removed.parquet",

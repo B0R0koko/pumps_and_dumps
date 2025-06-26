@@ -1,13 +1,11 @@
+import json
+import re
 from typing import *
 
 import scrapy
-import re
-import json
-
 
 KUCOIN_API_URL = "https://historical-data.kucoin.com/?delimiter=/&prefix=data%2Fspot%2Fdaily%2Ftrades%2F{}%2F"
 KUCOIN_ROOT = "https://historical-data.kucoin.com/"
-
 
 CONFIG_PATH = "configs/kucoin.json"
 
@@ -50,7 +48,6 @@ class KucoinTradeParser(scrapy.Spider):
         hrefs = [href for href in hrefs if "CHECKSUM" not in href]
 
         for href in hrefs:
-
             data_url = f"{KUCOIN_ROOT}{href}"
             slug = re.search(r"(.*?).zip", href.split("/")[-1])[1]
 

@@ -1,19 +1,16 @@
-from tqdm import tqdm
-from multiprocessing import Pool
-from multiprocessing.pool import AsyncResult
-from functools import partial
-from polars.io.csv.batched_reader import BatchedCsvReader
-from typing import *
-
-
-import polars as pl
-import pandas as pd
-import zipfile
+import gc
+import json
 import os
 import re
-import json
-import gc
+import zipfile
+from functools import partial
+from multiprocessing import Pool
+from multiprocessing.pool import AsyncResult
+from typing import *
 
+import polars as pl
+from polars.io.csv.batched_reader import BatchedCsvReader
+from tqdm import tqdm
 
 # Zipped data is stored without column names, which vary across exchanges, therefore
 # we need this map to dynamically assign columns to dataframe for a specified exchange
@@ -57,16 +54,16 @@ class ZipToParquetTransfromer:
     """
 
     def __init__(
-        self,
-        trades_dir: str = "data/trades",
-        exchange: str = "binance",
-        # output_dir will be used as output directory for all parquet files
-        output_dir: str | None = "data/trades_parquet",
-        transform_tickers: List[str] | None = None,
-        require_split_into_days: bool = True,
-        progress_file: str = "preprocessing/progress.json",
-        warm_start: bool = False,
-        n_workers: int = 1,
+            self,
+            trades_dir: str = "data/trades",
+            exchange: str = "binance",
+            # output_dir will be used as output directory for all parquet files
+            output_dir: str | None = "data/trades_parquet",
+            transform_tickers: List[str] | None = None,
+            require_split_into_days: bool = True,
+            progress_file: str = "preprocessing/progress.json",
+            warm_start: bool = False,
+            n_workers: int = 1,
     ):
         self.exchange: str = exchange
         self.trades_dir: str = trades_dir
@@ -98,7 +95,7 @@ class ZipToParquetTransfromer:
         # Multiprocess mode
         else:
             assert (
-                warm_start == False
+                    warm_start == False
             ), "Can't run warm_start=True in multiprocessing mode, reset n_workers to 1"
             self.tickers: List[str] = (
                 transform_tickers if transform_tickers else self.load_tickers()
@@ -133,7 +130,7 @@ class ZipToParquetTransfromer:
             self.unzip_zipped_csv(ticker=ticker, slug=slug)
 
     def write_to_parquet(
-        self, df: pl.DataFrame, output_ticker_dir: str, file_no_ext: str, ticker: str
+            self, df: pl.DataFrame, output_ticker_dir: str, file_no_ext: str, ticker: str
     ) -> None:
         """Write data to parquet file"""
         # Group by data by days and write to parquet files
@@ -163,7 +160,7 @@ class ZipToParquetTransfromer:
             df_date = df_date.drop(["date"])
 
             df_date.to_pandas().to_parquet(
-                file_path, compression="gzip", engine="fastparquet", 
+                file_path, compression="gzip", engine="fastparquet",
                 append=os.path.exists(file_path), index=False
             )
 
@@ -193,7 +190,7 @@ class ZipToParquetTransfromer:
         # create output_dir if it doesn't exist and save parquet file to it
         os.makedirs(output_ticker_dir, exist_ok=True)
 
-        if os.path.getsize(file_path) / 1024**2 <= 512:
+        if os.path.getsize(file_path) / 1024 ** 2 <= 512:
             # If unpacked csv file is less than 512mb than load it in one go
             df: pl.DataFrame = pl.read_csv(
                 source=file_path,

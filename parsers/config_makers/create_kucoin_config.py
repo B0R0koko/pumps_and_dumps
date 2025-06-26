@@ -1,12 +1,8 @@
-from pathlib import Path
+import json
+import re
 from typing import *
 
-
 import requests
-import os
-import re
-import json
-
 
 KUCOIN_URLS = [
     "https://historical-data.kucoin.com/?delimiter=/&prefix=data%2Fspot%2Fdaily%2Ftrades%2F",

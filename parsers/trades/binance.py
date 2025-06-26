@@ -1,11 +1,11 @@
-from scrapy.utils.project import get_project_settings
+import json
+import re
 from typing import *
-
+from typing import Any, Generator
 
 import scrapy
-import re
-import json
-
+from scrapy import Request
+from scrapy.utils.project import get_project_settings
 
 BINANCE_API_URL = "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision?delimiter=/&prefix=data/spot/monthly/trades/"
 BINANCE_ROOT = "https://data.binance.vision/"
@@ -25,7 +25,7 @@ class BinanceTradeParser(scrapy.Spider):
         "OUTPUT_DIR": "data/trades/binance",
     }
 
-    def __init__(self) -> Self:
+    def __init__(self):
         super().__init__()
         self.settings = get_project_settings()
         self.tickers: List[str] = self.load_tickers()
@@ -35,7 +35,7 @@ class BinanceTradeParser(scrapy.Spider):
             config = json.load(file)
         return config["tickers_to_collect"]
 
-    def start_requests(self) -> Iterable[scrapy.Request]:
+    def start_requests(self) -> Generator[Request]:
         """For each ticker query the page with all zip files laid out by months"""
         for ticker in self.tickers:
             yield scrapy.Request(
@@ -52,7 +52,6 @@ class BinanceTradeParser(scrapy.Spider):
         hrefs = [href for href in hrefs if "CHECKSUM" not in href]
 
         for href in hrefs:
-
             data_url = f"{BINANCE_ROOT}{href}"
             slug = re.search(r"(.*?).zip", href.split("/")[-1])[1]
 

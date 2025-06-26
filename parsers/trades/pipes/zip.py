@@ -1,6 +1,3 @@
-from scrapy import Spider
-from typing import *
-
 import os
 
 

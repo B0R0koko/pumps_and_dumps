@@ -1,12 +1,8 @@
-from pathlib import Path
+import json
+import re
 from typing import *
 
-
 import requests
-import os
-import re
-import json
-
 
 BINANCE_URLS = [
     "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision?delimiter=/&prefix=data/spot/monthly/trades/",
